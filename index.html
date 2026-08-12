@@ -224,13 +224,7 @@
       applyThermal(imgData);
       thermalCtx.putImageData(imgData, 0, 0);
 
-      ctx.save();
-      ctx.filter = 'blur(8px)';
-      ctx.globalAlpha = 0.75;
       ctx.drawImage(video, 0, 0, vw, vh);
-      ctx.filter = 'none';
-      ctx.globalAlpha = 1;
-      ctx.restore();
 
       ctx.save();
       ctx.beginPath();
