@@ -184,6 +184,30 @@
       max-width: calc(100% - 60px);
       opacity: 0.95;
     }
+
+    #scanline-overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 9;
+      pointer-events: none;
+      background: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 2px,
+        rgba(0, 0, 0, 0.08) 2px,
+        rgba(0, 0, 0, 0.08) 4px
+      );
+      mix-blend-mode: overlay;
+    }
+
+    #glitch-canvas {
+      position: absolute;
+      inset: 0;
+      z-index: 11;
+      pointer-events: none;
+      opacity: 0;
+      mix-blend-mode: screen;
+    }
   </style>
 </head>
 <body>
@@ -201,6 +225,8 @@
       <button id="toggleBtn">Start Camera</button>
     </div>
     <div id="debug" class="hud-block hud-text">STATUS: waiting</div>
+    <div id="scanline-overlay"></div>
+    <canvas id="glitch-canvas" width="1280" height="720"></canvas>
     <div id="boot">
       <h1>THERMAL HAND SCAN</h1>
       <p>Retro terminal thermal effect with live MediaPipe hand landmark tracking, scanned region, and HUD overlay. Click ENTRAR to initialize the camera.</p>
@@ -217,6 +243,13 @@
 
     const VIDEO_WIDTH = 1280;
     const VIDEO_HEIGHT = 720;
+    const BLUR_RADIUS = 15;
+    const GLITCH_INTENSITY = 0.03;
+    const HAND_COLORS = [
+      { label: 'H1', accent: '#ff3c5f', thermalShift: 0 },
+      { label: 'H2', accent: '#3cffda', thermalShift: 0.15 }
+    ];
+
     const modelAssetPath = 'https://storage.googleapis.com/mediapipe-assets/hand_landmarker.task';
     const assetsPath = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm';
 
@@ -224,9 +257,11 @@
     const viewport = document.getElementById('viewport');
     const hiddenCanvas = document.getElementById('hiddenCanvas');
     const thermalCanvas = document.getElementById('thermalCanvas');
+    const glitchCanvas = document.getElementById('glitch-canvas');
     const ctx = viewport.getContext('2d');
     const hiddenCtx = hiddenCanvas.getContext('2d');
     const thermalCtx = thermalCanvas.getContext('2d');
+    const glitchCtx = glitchCanvas.getContext('2d');
 
     const hudLeft = document.getElementById('hud-left');
     const hudRight = document.getElementById('hud-right');
@@ -244,23 +279,18 @@
     let seedHex = generateSeed();
     let hudJson = {
       seed: seedHex,
-      area: '00%',
-      tmax: '28°C',
+      h1Area: '00%', h2Area: '00%',
+      h1Temp: '--°C', h2Temp: '--°C',
       state: 'IDLE',
       view: 'SCAN',
       dot: '#7f8fa4'
     };
-    let lastBox = null;
-    let motionScalar = 0;
+    let lastBoxes = [null, null];
+    let motionScalars = [0, 0];
     let cameraReady = false;
     let debugText = 'idle';
-
-    const shapeState = {
-      center: { x: VIDEO_WIDTH / 2, y: VIDEO_HEIGHT / 2 },
-      angle: 0,
-      width: VIDEO_WIDTH * 0.45,
-      height: VIDEO_HEIGHT * 0.45
-    };
+    let frameCount = 0;
+    let glitchTimer = 0;
 
     enterBtn.addEventListener('click', async () => {
       boot.style.display = 'none';
@@ -350,9 +380,9 @@
         cameraStream.getTracks().forEach(track => track.stop());
         cameraStream = null;
       }
-      handLandmarker = handLandmarker;
       ctx.fillStyle = '#040c18';
       ctx.fillRect(0, 0, viewport.width, viewport.height);
+      glitchCtx.clearRect(0, 0, glitchCanvas.width, glitchCanvas.height);
       hudJson.state = 'IDLE';
       hudJson.dot = '#7f8fa4';
       updateHudOverlay();
@@ -366,10 +396,10 @@
         handLandmarker = await HandLandmarker.createFromOptions(vision, {
           baseOptions: { modelAssetPath },
           runningMode: 'VIDEO',
-          numHands: 1,
-          minHandDetectionConfidence: 0.75,
-          minTrackingConfidence: 0.75,
-          minHandPresenceConfidence: 0.75
+          numHands: 2,
+          minHandDetectionConfidence: 0.8,
+          minTrackingConfidence: 0.8,
+          minHandPresenceConfidence: 0.8
         });
         debugText = 'model loaded';
         hudJson.state = 'ACTIVE';
@@ -418,29 +448,100 @@
 
       hiddenCtx.drawImage(video, 0, 0, VIDEO_WIDTH, VIDEO_HEIGHT);
       const imageData = hiddenCtx.getImageData(0, 0, VIDEO_WIDTH, VIDEO_HEIGHT);
-      thermalCtx.putImageData(applyThermalColormap(imageData), 0, 0);
-      ctx.drawImage(video, 0, 0, viewport.width, viewport.height);
+      thermalCtx.putImageData(applyThermalColormap(imageData, 0), 0, 0);
 
-      let boxInfo = null;
+      let handResults = [];
       try {
         const result = await handLandmarker.detectForVideo(video, performance.now());
-        const landmarks = result?.landmarks?.[0] ?? [];
-        boxInfo = landmarks.length ? computeRotatedBoundingBox(landmarks) : null;
+        const allLandmarks = result?.landmarks ?? [];
+        handResults = allLandmarks
+          .filter(lm => lm && lm.length > 0)
+          .map(lm => computeRotatedBoundingBox(lm));
       } catch (error) {
         console.warn('HandLandmarker detect error:', error);
         debugText = 'detection error';
         updateDebug();
       }
 
-      if (boxInfo) {
-        lastBox = boxInfo;
-        motionScalar = computeMotion(boxInfo);
-        drawThermalScanBox(boxInfo);
-      } else {
-        motionScalar = Math.max(0, motionScalar * 0.92 - 0.02);
+      const scaleX = viewport.width / VIDEO_WIDTH;
+      const scaleY = viewport.height / VIDEO_HEIGHT;
+
+      ctx.save();
+      ctx.filter = `blur(${BLUR_RADIUS}px)`;
+      ctx.globalAlpha = 0.85;
+      ctx.drawImage(video, 0, 0, viewport.width, viewport.height);
+      ctx.filter = 'none';
+      ctx.globalAlpha = 1;
+      ctx.restore();
+
+      const combinedPath = new Path2D();
+      const scaledBoxes = [];
+
+      for (let i = 0; i < handResults.length; i++) {
+        const box = handResults[i];
+        const scaled = scaleBoxToViewport(box, scaleX, scaleY);
+        scaledBoxes.push(scaled);
+
+        if (lastBoxes[i]) {
+          const dx = Math.abs(box.cx - lastBoxes[i].cx);
+          const dy = Math.abs(box.cy - lastBoxes[i].cy);
+          motionScalars[i] = Math.min(1, Math.max(0, (dx + dy) / 40));
+        } else {
+          motionScalars[i] = 0.08;
+        }
+        lastBoxes[i] = box;
+
+        const rotatedRect = new Path2D();
+        rotatedRect.save();
+        rotatedRect.translate(scaled.cx, scaled.cy);
+        rotatedRect.rotate(scaled.angle);
+        rotatedRect.rect(-scaled.width / 2, -scaled.height / 2, scaled.width, scaled.height);
+        rotatedRect.restore();
+        combinedPath.addPath(rotatedRect);
       }
 
-      updateHudData(boxInfo);
+      for (let i = handResults.length; i < 2; i++) {
+        lastBoxes[i] = null;
+        motionScalars[i] = Math.max(0, motionScalars[i] * 0.92 - 0.02);
+      }
+
+      if (scaledBoxes.length > 0) {
+        ctx.save();
+        ctx.clip(combinedPath);
+        ctx.filter = 'none';
+        ctx.drawImage(video, 0, 0, viewport.width, viewport.height);
+        ctx.restore();
+
+        for (let i = 0; i < scaledBoxes.length; i++) {
+          const scaled = scaledBoxes[i];
+          const thermalShift = HAND_COLORS[i]?.thermalShift ?? 0;
+
+          const handThermalCanvas = document.createElement('canvas');
+          handThermalCanvas.width = VIDEO_WIDTH;
+          handThermalCanvas.height = VIDEO_HEIGHT;
+          const handThermalCtx = handThermalCanvas.getContext('2d');
+          const handImageData = hiddenCtx.getImageData(0, 0, VIDEO_WIDTH, VIDEO_HEIGHT);
+          handThermalCtx.putImageData(applyThermalColormap(handImageData, thermalShift), 0, 0);
+
+          ctx.save();
+          ctx.translate(scaled.cx, scaled.cy);
+          ctx.rotate(scaled.angle);
+          ctx.beginPath();
+          ctx.rect(-scaled.width / 2, -scaled.height / 2, scaled.width, scaled.height);
+          ctx.clip();
+          ctx.globalAlpha = 0.92;
+          ctx.drawImage(handThermalCanvas, 0, 0, viewport.width, viewport.height);
+          ctx.globalAlpha = 1;
+          ctx.restore();
+
+          drawScanFrame(scaled, i);
+        }
+      }
+
+      drawGlitchEffect(scaledBoxes);
+      frameCount++;
+
+      updateHudData(handResults);
       drawHudOverlay();
     }
 
@@ -474,56 +575,7 @@
       };
     }
 
-    function computeMotion(boxInfo) {
-      if (!lastBox) {
-        return 0.08;
-      }
-      const dx = Math.abs(boxInfo.cx - lastBox.cx);
-      const dy = Math.abs(boxInfo.cy - lastBox.cy);
-      return Math.min(1, Math.max(0, (dx + dy) / 40));
-    }
-
-    function drawThermalScanBox(boxInfo) {
-      const scaled = scaleBoxToViewport(boxInfo);
-      ctx.save();
-      ctx.translate(scaled.cx, scaled.cy);
-      ctx.rotate(scaled.angle);
-      ctx.beginPath();
-      ctx.rect(-scaled.width / 2, -scaled.height / 2, scaled.width, scaled.height);
-      ctx.clip();
-      ctx.globalAlpha = 0.96;
-      ctx.drawImage(thermalCanvas, 0, 0, viewport.width, viewport.height);
-      ctx.globalAlpha = 1;
-      ctx.restore();
-      drawScanFrame(scaled);
-    }
-
-    function drawScanFrame(box) {
-      const border = 2;
-      ctx.save();
-      ctx.strokeStyle = 'rgba(255,255,255,0.92)';
-      ctx.lineWidth = border;
-      ctx.translate(box.cx, box.cy);
-      ctx.rotate(box.angle);
-      ctx.strokeRect(-box.width / 2, -box.height / 2, box.width, box.height);
-      drawCornerBracket(-box.width / 2, -box.height / 2, 22, 18);
-      drawCornerBracket(box.width / 2, -box.height / 2, -22, 18);
-      drawCornerBracket(-box.width / 2, box.height / 2, 22, -18);
-      drawCornerBracket(box.width / 2, box.height / 2, -22, -18);
-      ctx.restore();
-    }
-
-    function drawCornerBracket(x, y, offsetX, offsetY) {
-      ctx.beginPath();
-      ctx.moveTo(x + Math.sign(offsetX) * 4, y);
-      ctx.lineTo(x + offsetX, y);
-      ctx.lineTo(x + offsetX, y + offsetY);
-      ctx.stroke();
-    }
-
-    function scaleBoxToViewport(box) {
-      const scaleX = viewport.width / VIDEO_WIDTH;
-      const scaleY = viewport.height / VIDEO_HEIGHT;
+    function scaleBoxToViewport(box, scaleX, scaleY) {
       return {
         cx: box.cx * scaleX,
         cy: box.cy * scaleY,
@@ -533,7 +585,7 @@
       };
     }
 
-    function applyThermalColormap(imageData) {
+    function applyThermalColormap(imageData, shift) {
       const data = imageData.data;
       for (let i = 0; i < data.length; i += 4) {
         const r = data[i];
@@ -541,7 +593,8 @@
         const b = data[i + 2];
         const luminance = 0.2989 * r + 0.587 * g + 0.114 * b;
         const normalized = Math.min(1, Math.max(0, luminance / 255));
-        const [cr, cg, cb] = paletteLut(normalized);
+        const adjusted = Math.min(1, Math.max(0, normalized + shift));
+        const [cr, cg, cb] = cyberpunkLut(adjusted);
         data[i] = cr;
         data[i + 1] = cg;
         data[i + 2] = cb;
@@ -549,44 +602,135 @@
       return imageData;
     }
 
-    function paletteLut(t) {
-      if (t < 0.2) {
-        return [36, 82 + t * 170, 255];
+    function cyberpunkLut(t) {
+      if (t < 0.12) {
+        return [18, 10, 60 + t * 800];
+      }
+      if (t < 0.25) {
+        const f = (t - 0.12) / 0.13;
+        return [30 + f * 40, 8 + f * 20, 160 + f * 95];
       }
       if (t < 0.4) {
-        return [36, 255, 140 + (t - 0.2) * 575];
+        const f = (t - 0.25) / 0.15;
+        return [70 + f * 80, 28 + f * 120, 255 - f * 100];
       }
-      if (t < 0.65) {
-        return [120 + (t - 0.4) * 540, 255, 24];
+      if (t < 0.55) {
+        const f = (t - 0.4) / 0.15;
+        return [150 + f * 105, 148 + f * 107, 155 - f * 130];
+      }
+      if (t < 0.7) {
+        const f = (t - 0.55) / 0.15;
+        return [255, 255 - f * 80, 25 + f * 10];
       }
       if (t < 0.85) {
-        return [255, 200 + (t - 0.65) * 275, 60];
+        const f = (t - 0.7) / 0.15;
+        return [255, 175 - f * 100, 35 + f * 30];
       }
-      return [255, 80 + (t - 0.85) * 300, 24 + (t - 0.85) * 80];
+      const f = (t - 0.85) / 0.15;
+      return [255, 75 + f * 20, 65 + f * 40];
     }
 
-    function updateHudData(boxInfo) {
-      const areaPct = boxInfo ? Math.round((boxInfo.width * boxInfo.height) / (VIDEO_WIDTH * VIDEO_HEIGHT) * 100) : 0;
-      const temp = boxInfo ? 32 + Math.round(Math.min(28, areaPct * 0.45 + motionScalar * 30)) : 24;
+    function drawScanFrame(box, handIndex) {
+      const color = HAND_COLORS[handIndex] ?? HAND_COLORS[0];
+      const border = 2;
+      ctx.save();
+      ctx.strokeStyle = color.accent;
+      ctx.lineWidth = border;
+      ctx.shadowColor = color.accent;
+      ctx.shadowBlur = 12;
+      ctx.translate(box.cx, box.cy);
+      ctx.rotate(box.angle);
+      ctx.strokeRect(-box.width / 2, -box.height / 2, box.width, box.height);
+      ctx.shadowBlur = 0;
+      drawCornerBracket(-box.width / 2, -box.height / 2, 22, 18, color.accent);
+      drawCornerBracket(box.width / 2, -box.height / 2, -22, 18, color.accent);
+      drawCornerBracket(-box.width / 2, box.height / 2, 22, -18, color.accent);
+      drawCornerBracket(box.width / 2, box.height / 2, -22, -18, color.accent);
+
+      ctx.fillStyle = color.accent;
+      ctx.font = 'bold 13px "Source Code Pro", monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText(color.label, -box.width / 2, -box.height / 2 - 8);
+      ctx.restore();
+    }
+
+    function drawCornerBracket(x, y, offsetX, offsetY, color) {
+      ctx.strokeStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(x + Math.sign(offsetX) * 4, y);
+      ctx.lineTo(x + offsetX, y);
+      ctx.lineTo(x + offsetX, y + offsetY);
+      ctx.stroke();
+    }
+
+    function drawGlitchEffect(scaledBoxes) {
+      glitchCtx.clearRect(0, 0, glitchCanvas.width, glitchCanvas.height);
+
+      const shouldGlitch = Math.random() < 0.04;
+      if (!shouldGlitch && glitchTimer <= 0) {
+        return;
+      }
+
+      if (shouldGlitch) {
+        glitchTimer = 3 + Math.floor(Math.random() * 4);
+      }
+
+      glitchTimer--;
+      glitchCanvas.style.opacity = '0.6';
+
+      const sliceCount = 2 + Math.floor(Math.random() * 5);
+      for (let s = 0; s < sliceCount; s++) {
+        const y = Math.random() * VIDEO_HEIGHT;
+        const h = 2 + Math.random() * 12;
+        const offsetX = (Math.random() - 0.5) * 30 * GLITCH_INTENSITY * 10;
+
+        glitchCtx.save();
+        glitchCtx.globalAlpha = 0.3 + Math.random() * 0.4;
+
+        glitchCtx.drawImage(
+          viewport,
+          0, y * (viewport.height / VIDEO_HEIGHT), viewport.width, h * (viewport.height / VIDEO_HEIGHT),
+          offsetX, y * (viewport.height / VIDEO_HEIGHT), viewport.width, h * (viewport.height / VIDEO_HEIGHT)
+        );
+        glitchCtx.restore();
+      }
+
+      if (glitchTimer <= 0) {
+        glitchCanvas.style.opacity = '0';
+      }
+    }
+
+    function updateHudData(handResults) {
+      const handCount = handResults.length;
+      const areas = [];
+      const temps = [];
+
+      for (let i = 0; i < handResults.length; i++) {
+        const box = handResults[i];
+        const areaPct = Math.round((box.width * box.height) / (VIDEO_WIDTH * VIDEO_HEIGHT) * 100);
+        const temp = 32 + Math.round(Math.min(28, areaPct * 0.45 + motionScalars[i] * 30));
+        areas.push(`${String(areaPct).padStart(2, '0')}%`);
+        temps.push(`${temp}°C`);
+      }
+
+      while (areas.length < 2) areas.push('00%');
+      while (temps.length < 2) temps.push('--°C');
+
       hudJson = {
         seed: seedHex,
-        area: `${String(areaPct).padStart(2, '0')}%`,
-        tmax: `${temp}°C`,
-        state: boxInfo ? 'ACTIVE' : 'IDLE',
-        view: boxInfo ? 'HAND' : 'WAIT',
-        dot: boxInfo ? '#4cff96' : '#7f8fa4'
+        h1Area: areas[0], h2Area: areas[1],
+        h1Temp: temps[0], h2Temp: temps[1],
+        state: handCount > 0 ? 'ACTIVE' : 'IDLE',
+        view: handCount === 2 ? 'DUAL' : handCount === 1 ? 'HAND' : 'WAIT',
+        dot: handCount > 0 ? '#4cff96' : '#7f8fa4',
+        handCount
       };
-      fakeSocketUpdate(JSON.parse(JSON.stringify(hudJson)));
-    }
-
-    function fakeSocketUpdate(payload) {
-      hudJson = payload;
     }
 
     function drawHudOverlay() {
       hudLeft.textContent = `HAND.SYS_08 - CALOR\nSEED: ${hudJson.seed}`;
-      hudRight.textContent = `AREA: ${hudJson.area}\nTMAX: ${hudJson.tmax}`;
-      hudState.innerHTML = `<span class="status-dot" style="background:${hudJson.dot};"></span>STATE: ${hudJson.state}`;
+      hudRight.textContent = `H1: ${hudJson.h1Area} ${hudJson.h1Temp}\nH2: ${hudJson.h2Area} ${hudJson.h2Temp}`;
+      hudState.innerHTML = `<span class="status-dot" style="background:${hudJson.dot};"></span>STATE: ${hudJson.state} [${hudJson.handCount ?? 0}]`;
       hudView.textContent = `VIEW: ${hudJson.view}`;
       updateDebug();
     }
