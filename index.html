@@ -218,7 +218,7 @@
     const VIDEO_WIDTH = 1280;
     const VIDEO_HEIGHT = 720;
     const modelAssetPath = 'https://storage.googleapis.com/mediapipe-assets/hand_landmarker.task';
-    const assetsPath = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1';
+    const assetsPath = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm';
 
     const video = document.getElementById('video');
     const viewport = document.getElementById('viewport');
@@ -367,12 +367,15 @@
           baseOptions: { modelAssetPath },
           runningMode: 'VIDEO',
           numHands: 1,
-          minHandDetectionConfidence: 0.55,
-          minTrackingConfidence: 0.55,
-          minHandPresenceConfidence: 0.5
+          minHandDetectionConfidence: 0.75,
+          minTrackingConfidence: 0.75,
+          minHandPresenceConfidence: 0.75
         });
         debugText = 'model loaded';
+        hudJson.state = 'ACTIVE';
+        hudJson.dot = '#4cff96';
         updateDebug();
+        updateHudOverlay();
       } catch (error) {
         console.error('MediaPipe load failed:', error);
         debugText = 'model load failed';
