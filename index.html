@@ -3,695 +3,306 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Thermal Hand Tracker Demo</title>
+  <title>Fingertip Screen</title>
   <style>
-    :root {
-      color-scheme: dark;
-      --bg: #061017;
-      --surface: rgba(10,20,34,0.92);
-      --text: #e8f3ff;
-      --muted: #7fa3c0;
-      --accent: #ff5f45;
-      --green: #4cff96;
-      --warn: #f0b24f;
-      --outline: rgba(255, 255, 255, 0.8);
-      font-family: "Source Code Pro", "Fira Code", ui-monospace, SFMono-Regular, monospace;
-    }
-
-    * {
-      box-sizing: border-box;
-    }
-
-    html, body {
-      margin: 0;
-      min-height: 100vh;
-      background: radial-gradient(circle at top, rgba(30, 75, 116, 0.24), transparent 24%),
-                  radial-gradient(circle at 20% 80%, rgba(255, 95, 69, 0.12), transparent 18%),
-                  var(--bg);
-      color: var(--text);
-    }
-
-    body {
-      display: grid;
-      place-items: center;
-      padding: 20px;
-    }
-
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; background: #000; overflow: hidden; }
+    body { display: grid; place-items: center; }
     #app {
       position: relative;
-      width: min(1080px, 100vw - 40px);
-      aspect-ratio: 16 / 9;
-      border-radius: 16px;
-      overflow: hidden;
-      background: rgba(2, 10, 22, 0.96);
-      box-shadow: 0 28px 80px rgba(0,0,0,0.38);
+      width: 100vw;
+      height: 100vh;
     }
-
-    canvas {
-      width: 100%;
-      height: 100%;
-      display: block;
-      image-rendering: auto;
-    }
-
-    #controls {
+    canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+    #hud {
       position: absolute;
-      right: 18px;
-      top: 18px;
-      display: flex;
-      gap: 10px;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
       z-index: 10;
-    }
-
-    button {
-      border: 1px solid rgba(255,255,255,0.28);
-      background: rgba(14, 30, 50, 0.9);
-      color: var(--text);
-      padding: 0.8rem 1.1rem;
-      border-radius: 999px;
-      font: inherit;
-      letter-spacing: 0.12em;
+      color: rgba(255,255,255,0.7);
+      font: 600 13px/1 "SF Mono", "Fira Code", ui-monospace, monospace;
+      letter-spacing: 0.2em;
       text-transform: uppercase;
-      cursor: pointer;
-      transition: transform 0.16s ease, background 0.16s ease;
+      text-shadow: 0 0 12px rgba(0,180,255,0.3);
+      pointer-events: none;
+      text-align: center;
+      white-space: pre;
     }
-
-    button:hover {
-      background: rgba(26, 58, 87, 0.96);
-      transform: translateY(-1px);
-    }
-
     #boot {
       position: absolute;
       inset: 0;
       display: grid;
       place-items: center;
-      background: rgba(4, 9, 18, 0.92);
-      z-index: 15;
+      background: rgba(0,0,0,0.92);
+      z-index: 20;
       text-align: center;
-      gap: 18px;
-      padding: 32px;
+      gap: 16px;
     }
-
     #boot h1 {
-      margin: 0;
-      font-size: clamp(1.5rem, 3vw, 3rem);
-      letter-spacing: 0.2em;
-      text-transform: uppercase;
       color: #7fdfff;
-      text-shadow: 0 0 18px rgba(127,223,255,0.24);
+      font: 600 clamp(1.2rem, 3vw, 2.4rem)/1.2 "SF Mono", monospace;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
     }
-
     #boot p {
-      margin: 0;
-      color: var(--muted);
-      max-width: 26rem;
-      line-height: 1.55;
+      color: #7fa3c0;
+      font: 14px/1.5 "SF Mono", monospace;
+      max-width: 32ch;
     }
-
     #boot button {
-      min-width: 180px;
-      font-size: 0.95rem;
-      letter-spacing: 0.18em;
-    }
-
-    .hud-text {
-      font-size: 0.9rem;
-      letter-spacing: 0.18em;
-      text-shadow: 0 0 16px rgba(0, 160, 255, 0.16);
-      line-height: 1.4;
-      white-space: pre;
-    }
-
-    #hud-top,
-    #hud-bottom {
-      position: absolute;
-      z-index: 8;
-      pointer-events: none;
-      width: calc(100% - 40px);
-      padding: 16px 20px;
-    }
-
-    #hud-top {
-      top: 0;
-      display: flex;
-      justify-content: space-between;
-      gap: 12px;
-    }
-
-    #hud-bottom {
-      bottom: 0;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 12px;
-    }
-
-    .hud-block {
-      display: inline-grid;
-      gap: 6px;
-      background: rgba(8, 14, 26, 0.72);
-      border: 1px solid rgba(255,255,255,0.1);
-      box-shadow: inset 0 0 10px rgba(0,0,0,0.18);
-      padding: 12px 14px;
-      border-radius: 14px;
-    }
-
-    .hud-label {
-      color: var(--muted);
-      font-size: 0.75rem;
-      letter-spacing: 0.22em;
-      opacity: 0.9;
-    }
-
-    .status-dot {
-      width: 12px;
-      height: 12px;
+      margin-top: 8px;
+      padding: 10px 28px;
+      border: 1px solid rgba(255,255,255,0.25);
       border-radius: 999px;
-      display: inline-block;
-      vertical-align: middle;
-      margin-right: 8px;
-      box-shadow: 0 0 12px rgba(0,0,0,0.18);
+      background: rgba(14,30,50,0.9);
+      color: #e8f3ff;
+      font: 600 13px/1 "SF Mono", monospace;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      cursor: pointer;
     }
-
-    #debug {
-      position: absolute;
-      left: 18px;
-      top: 110px;
-      z-index: 12;
-      pointer-events: none;
-      width: auto;
-      max-width: calc(100% - 60px);
-      opacity: 0.95;
-    }
+    #boot button:hover { background: rgba(26,58,87,0.96); }
   </style>
 </head>
 <body>
   <div id="app">
-    <canvas id="viewport" width="1280" height="720"></canvas>
-    <div id="hud-top">
-      <div class="hud-block hud-text" id="hud-left"></div>
-      <div class="hud-block hud-text" id="hud-right"></div>
-    </div>
-    <div id="hud-bottom">
-      <div class="hud-block hud-text" id="hud-state"></div>
-      <div class="hud-block hud-text" id="hud-view"></div>
-    </div>
-    <div id="controls">
-      <button id="toggleBtn">Start Camera</button>
-    </div>
-    <div id="debug" class="hud-block hud-text">STATUS: waiting</div>
+    <canvas id="viewport"></canvas>
+    <div id="hud">aguardando duas maos...</div>
     <div id="boot">
-      <h1>THERMAL HAND SCAN</h1>
-      <p>Retro terminal thermal effect with live MediaPipe hand landmark tracking, scanned region, and HUD overlay. Click ENTRAR to initialize the camera.</p>
-      <button id="enterBtn">ENTRAR</button>
+      <h1>Fingertip Screen</h1>
+      <p>Use thumb + index finger on both hands to create a collaborative thermal viewport.</p>
+      <button id="enterBtn">INICIAR</button>
     </div>
   </div>
 
   <video id="video" playsinline muted style="display:none;"></video>
-  <canvas id="hiddenCanvas" width="1280" height="720" style="display:none;"></canvas>
+  <canvas id="offscreen" style="display:none;"></canvas>
 
   <script type="module">
     import { FilesetResolver, HandLandmarker } from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/vision_bundle.mjs';
 
-    const VIDEO_WIDTH = 1280;
-    const VIDEO_HEIGHT = 720;
-    const HAND_COLORS = [
-      { label: 'H1', accent: '#ff3c5f', thermalShift: 0 },
-      { label: 'H2', accent: '#3cffda', thermalShift: 0.15 }
-    ];
-
-    const modelAssetPath = 'https://storage.googleapis.com/mediapipe-assets/hand_landmarker.task';
-    const assetsPath = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm';
+    const VIDEO_W = 1280;
+    const VIDEO_H = 720;
+    const THERMAL_SCALE = 0.25;
+    const TW = (VIDEO_W * THERMAL_SCALE) | 0;
+    const TH = (VIDEO_H * THERMAL_SCALE) | 0;
+    const MODEL_URL = 'https://storage.googleapis.com/mediapipe-assets/hand_landmarker.task';
+    const ASSETS_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm';
 
     const video = document.getElementById('video');
     const viewport = document.getElementById('viewport');
-    const hiddenCanvas = document.getElementById('hiddenCanvas');
+    const offscreen = document.getElementById('offscreen');
     const ctx = viewport.getContext('2d');
-    const hiddenCtx = hiddenCanvas.getContext('2d');
-
-    const handThermalCanvases = [document.createElement('canvas'), document.createElement('canvas')];
-    const THERMAL_SCALE = 0.25;
-    const THERMAL_W = Math.round(VIDEO_WIDTH * THERMAL_SCALE);
-    const THERMAL_H = Math.round(VIDEO_HEIGHT * THERMAL_SCALE);
-    handThermalCanvases.forEach(c => { c.width = THERMAL_W; c.height = THERMAL_H; });
-    const thermalCache = [{ cx: -1, cy: -1, motion: -1, data: null }, { cx: -1, cy: -1, motion: -1, data: null }];
-
-    const hudLeft = document.getElementById('hud-left');
-    const hudRight = document.getElementById('hud-right');
-    const hudState = document.getElementById('hud-state');
-    const hudView = document.getElementById('hud-view');
-    const debugPanel = document.getElementById('debug');
-    const toggleBtn = document.getElementById('toggleBtn');
+    const offCtx = offscreen.getContext('2d');
+    const hud = document.getElementById('hud');
     const boot = document.getElementById('boot');
     const enterBtn = document.getElementById('enterBtn');
 
-    let handLandmarker = null;
-    let cameraStream = null;
+    offscreen.width = TW;
+    offscreen.height = TH;
+
+    let landmarker = null;
+    let stream = null;
     let running = false;
-    let animationHandle = null;
-    let seedHex = generateSeed();
-    let hudJson = {
-      seed: seedHex,
-      h1Area: '00%', h2Area: '00%',
-      h1Temp: '--°C', h2Temp: '--°C',
-      state: 'IDLE',
-      view: 'SCAN',
-      dot: '#7f8fa4'
-    };
-    let lastBoxes = [null, null];
-    let motionScalars = [0, 0];
+    let raf = null;
     let cameraReady = false;
-    let debugText = 'idle';
+
+    const thermalBuf = document.createElement('canvas');
+    thermalBuf.width = TW;
+    thermalBuf.height = TH;
+    const thermalCtx = thermalBuf.getContext('2d');
 
     enterBtn.addEventListener('click', async () => {
       boot.style.display = 'none';
-      await initCameraPipeline();
+      await start();
     });
 
-    toggleBtn.addEventListener('click', async () => {
-      if (running) {
-        stopCamera();
-      } else {
-        await initCameraPipeline();
+    async function start() {
+      if (!stream) {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: VIDEO_W, height: VIDEO_H }, audio: false
+        });
+        video.srcObject = stream;
+        video.muted = true;
+        video.autoplay = true;
+        video.playsInline = true;
+        await video.play();
+        await new Promise((res) => {
+          const check = () => {
+            if (video.videoWidth && video.videoHeight) { cameraReady = true; res(); }
+            else requestAnimationFrame(check);
+          };
+          check();
+        });
       }
-    });
-
-    async function initCameraPipeline() {
-      toggleBtn.disabled = true;
-      if (!cameraStream) {
-        cameraStream = await openCamera();
-      }
-
-      if (!handLandmarker) {
-        await loadMediaPipe();
-      }
-
-      if (!running) {
-        running = true;
-        toggleBtn.textContent = 'Stop Camera';
-        animateFrame();
-      }
-      toggleBtn.disabled = false;
-    }
-
-    async function openCamera() {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { width: VIDEO_WIDTH, height: VIDEO_HEIGHT }, audio: false });
-      video.srcObject = stream;
-      video.muted = true;
-      video.autoplay = true;
-      video.playsInline = true;
-      debugText = 'camera granted';
-      updateDebug();
-      await video.play();
-      await waitForVideoReady();
-      cameraReady = !!(video.videoWidth && video.videoHeight);
-      debugText = cameraReady ? 'camera ready' : 'camera no frame';
-      updateDebug();
-      return stream;
-    }
-
-    function waitForVideoReady() {
-      return new Promise((resolve, reject) => {
-        if (video.readyState >= 3 && video.videoWidth && video.videoHeight) {
-          resolve();
-          return;
-        }
-
-        const timeout = setTimeout(() => {
-          video.removeEventListener('loadedmetadata', onReady);
-          video.removeEventListener('canplay', onReady);
-          video.removeEventListener('canplaythrough', onReady);
-          reject(new Error('Video did not become ready in time'));
-        }, 8000);
-
-        const onReady = () => {
-          if (video.videoWidth && video.videoHeight) {
-            clearTimeout(timeout);
-            video.removeEventListener('loadedmetadata', onReady);
-            video.removeEventListener('canplay', onReady);
-            video.removeEventListener('canplaythrough', onReady);
-            resolve();
-          }
-        };
-
-        video.addEventListener('loadedmetadata', onReady, { once: true });
-        video.addEventListener('canplay', onReady, { once: true });
-        video.addEventListener('canplaythrough', onReady, { once: true });
-      });
-    }
-
-    function stopCamera() {
-      running = false;
-      toggleBtn.textContent = 'Start Camera';
-      if (animationHandle) {
-        cancelAnimationFrame(animationHandle);
-        animationHandle = null;
-      }
-      if (cameraStream) {
-        cameraStream.getTracks().forEach(track => track.stop());
-        cameraStream = null;
-      }
-      ctx.fillStyle = '#040c18';
-      ctx.fillRect(0, 0, viewport.width, viewport.height);
-      hudJson.state = 'IDLE';
-      hudJson.dot = '#7f8fa4';
-      updateHudOverlay();
-    }
-
-    async function loadMediaPipe() {
-      try {
-        debugText = 'loading model';
-        updateDebug();
-        const vision = await FilesetResolver.forVisionTasks(assetsPath);
-        handLandmarker = await HandLandmarker.createFromOptions(vision, {
-          baseOptions: { modelAssetPath },
+      if (!landmarker) {
+        const vision = await FilesetResolver.forVisionTasks(ASSETS_URL);
+        landmarker = await HandLandmarker.createFromOptions(vision, {
+          baseOptions: { modelAssetPath: MODEL_URL },
           runningMode: 'VIDEO',
           numHands: 2,
-          minHandDetectionConfidence: 0.55,
-          minTrackingConfidence: 0.55,
+          minHandDetectionConfidence: 0.6,
+          minTrackingConfidence: 0.6,
           minHandPresenceConfidence: 0.5
         });
-        debugText = 'model loaded';
-        hudJson.state = 'ACTIVE';
-        hudJson.dot = '#4cff96';
-        updateDebug();
-        updateHudOverlay();
-      } catch (error) {
-        console.error('MediaPipe load failed:', error);
-        debugText = 'model load failed';
-        updateDebug();
-        throw error;
       }
-    }
-
-    function animateFrame() {
       if (!running) {
-        return;
+        running = true;
+        loop();
       }
-
-      drawFrame()
-        .catch((error) => {
-          console.warn('Frame processing error:', error);
-          debugText = 'frame error';
-          updateDebug();
-        })
-        .finally(() => {
-          animationHandle = requestAnimationFrame(animateFrame);
-        });
     }
 
-    async function drawFrame() {
-      ctx.clearRect(0, 0, viewport.width, viewport.height);
-      ctx.fillStyle = '#040c18';
-      ctx.fillRect(0, 0, viewport.width, viewport.height);
+    function loop() {
+      if (!running) return;
+      draw().catch(console.warn).finally(() => { raf = requestAnimationFrame(loop); });
+    }
 
-      if (!cameraReady || video.readyState < 2 || !video.videoWidth || !video.videoHeight) {
-        debugText = `waiting for video (${video.readyState}/${video.videoWidth}x${video.videoHeight})`;
-        updateDebug();
+    async function draw() {
+      const vw = viewport.width = viewport.clientWidth * devicePixelRatio;
+      const vh = viewport.height = viewport.clientHeight * devicePixelRatio;
+
+      if (!cameraReady || video.readyState < 2) {
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, vw, vh);
         return;
       }
 
-      const scaleX = viewport.width / VIDEO_WIDTH;
-      const scaleY = viewport.height / VIDEO_HEIGHT;
-
-      let handResults = [];
+      let landmarks = null;
       try {
-        const result = await handLandmarker.detectForVideo(video, performance.now());
-        const allLandmarks = result?.landmarks ?? [];
-        handResults = allLandmarks
-          .filter(lm => lm && lm.length > 0)
-          .map(lm => computeRotatedBoundingBox(lm));
-        debugText = `detected: ${handResults.length} hand(s)`;
-      } catch (error) {
-        console.warn('HandLandmarker detect error:', error);
-        debugText = 'detection error';
-      }
-
-      const scaledBoxes = [];
-
-      for (let i = 0; i < handResults.length; i++) {
-        const box = handResults[i];
-        const scaled = scaleBoxToViewport(box, scaleX, scaleY);
-        scaledBoxes.push({ box, scaled });
-
-        if (lastBoxes[i]) {
-          const dx = Math.abs(box.cx - lastBoxes[i].cx);
-          const dy = Math.abs(box.cy - lastBoxes[i].cy);
-          motionScalars[i] = Math.min(1, Math.max(0, (dx + dy) / 40));
-        } else {
-          motionScalars[i] = 0.08;
+        const res = await landmarker.detectForVideo(video, performance.now());
+        const hands = res?.landmarks ?? [];
+        if (hands.length === 2) {
+          landmarks = hands;
         }
-        lastBoxes[i] = box;
+      } catch (e) { /* skip frame */ }
+
+      if (!landmarks) {
+        ctx.drawImage(video, 0, 0, vw, vh);
+        hud.textContent = 'aguardando duas maos...';
+        return;
       }
 
-      for (let i = handResults.length; i < 2; i++) {
-        lastBoxes[i] = null;
-        motionScalars[i] = Math.max(0, motionScalars[i] * 0.92 - 0.02);
+      const tips = [];
+      for (const hand of landmarks) {
+        tips.push({ x: hand[4].x * VIDEO_W, y: hand[4].y * VIDEO_H });
+        tips.push({ x: hand[8].x * VIDEO_W, y: hand[8].y * VIDEO_H });
       }
 
-      ctx.drawImage(video, 0, 0, viewport.width, viewport.height);
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      for (const p of tips) {
+        if (p.x < minX) minX = p.x;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.y > maxY) maxY = p.y;
+      }
 
-      for (let i = 0; i < scaledBoxes.length; i++) {
-        const { box, scaled } = scaledBoxes[i];
-        const thermalShift = HAND_COLORS[i]?.thermalShift ?? 0;
-        const handCanvas = handThermalCanvases[i];
-        const motion = motionScalars[i];
-        const cache = thermalCache[i];
+      const pad = 12;
+      minX = Math.max(0, minX - pad);
+      minY = Math.max(0, minY - pad);
+      maxX = Math.min(VIDEO_W, maxX + pad);
+      maxY = Math.min(VIDEO_H, maxY + pad);
 
-        const posChanged = Math.abs(box.cx - cache.cx) > 8 || Math.abs(box.cy - cache.cy) > 8;
-        const motionChanged = Math.abs(motion - cache.motion) > 0.1;
+      const sx = vw / VIDEO_W;
+      const sy = vh / VIDEO_H;
 
-        if (posChanged || motionChanged || !cache.data) {
-          hiddenCtx.drawImage(video, 0, 0, THERMAL_W, THERMAL_H);
-          const imageData = hiddenCtx.getImageData(0, 0, THERMAL_W, THERMAL_H);
-          const scaledBox = { cx: box.cx * THERMAL_SCALE, cy: box.cy * THERMAL_SCALE, width: box.width * THERMAL_SCALE, height: box.height * THERMAL_SCALE };
-          applyThermalColormap(imageData, thermalShift, scaledBox, motion);
-          handCanvas.getContext('2d').putImageData(imageData, 0, 0);
-          cache.cx = box.cx;
-          cache.cy = box.cy;
-          cache.motion = motion;
-          cache.data = true;
-        }
+      const rx = minX * sx;
+      const ry = minY * sy;
+      const rw = (maxX - minX) * sx;
+      const rh = (maxY - minY) * sy;
 
-        ctx.save();
-        ctx.translate(scaled.cx, scaled.cy);
-        ctx.rotate(scaled.angle);
+      const tw = (maxX - minX) * THERMAL_SCALE;
+      const th = (maxY - minY) * THERMAL_SCALE;
+      const tx = minX * THERMAL_SCALE;
+      const ty = minY * THERMAL_SCALE;
+
+      offCtx.drawImage(video,
+        tx, ty, tw, th,
+        0, 0, TW, TH
+      );
+      const imgData = offCtx.getImageData(0, 0, TW, TH);
+      applyThermal(imgData);
+      thermalCtx.putImageData(imgData, 0, 0);
+
+      ctx.save();
+      ctx.filter = 'blur(8px)';
+      ctx.globalAlpha = 0.75;
+      ctx.drawImage(video, 0, 0, vw, vh);
+      ctx.filter = 'none';
+      ctx.globalAlpha = 1;
+      ctx.restore();
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.roundRect(rx, ry, rw, rh, 6);
+      ctx.clip();
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'medium';
+      ctx.drawImage(thermalBuf, 0, 0, TW, TH, rx, ry, rw, rh);
+      ctx.restore();
+
+      ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+      ctx.lineWidth = 2;
+      ctx.shadowColor = 'rgba(0,200,255,0.4)';
+      ctx.shadowBlur = 14;
+      ctx.beginPath();
+      ctx.roundRect(rx, ry, rw, rh, 6);
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+
+      for (const p of tips) {
+        const px = p.x * sx;
+        const py = p.y * sy;
         ctx.beginPath();
-        ctx.rect(-scaled.width / 2, -scaled.height / 2, scaled.width, scaled.height);
-        ctx.clip();
-        ctx.globalAlpha = 0.92;
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'medium';
-        ctx.drawImage(handCanvas, 0, 0, viewport.width, viewport.height);
-        ctx.globalAlpha = 1;
-        ctx.restore();
-
-        drawScanFrame(scaled, i);
+        ctx.arc(px, py, 5, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(0,255,200,0.9)';
+        ctx.shadowColor = 'rgba(0,255,200,0.6)';
+        ctx.shadowBlur = 10;
+        ctx.fill();
+        ctx.shadowBlur = 0;
       }
 
-      updateHudData(handResults);
-      drawHudOverlay();
+      hud.textContent = 'JANELA ATIVA';
     }
 
-    function computeRotatedBoundingBox(landmarks) {
-      const coords = landmarks.map((pt) => ({ x: pt.x * VIDEO_WIDTH, y: pt.y * VIDEO_HEIGHT }));
-      const xValues = coords.map((p) => p.x);
-      const yValues = coords.map((p) => p.y);
-      const minX = Math.min(...xValues);
-      const maxX = Math.max(...xValues);
-      const minY = Math.min(...yValues);
-      const maxY = Math.max(...yValues);
-      const width = Math.max((maxX - minX) * 1.3, 120);
-      const height = Math.max((maxY - minY) * 1.6, 120);
-      const cx = (minX + maxX) / 2;
-      const cy = (minY + maxY) / 2;
-      const direction = getDirectionVector(coords);
-      const angle = Math.atan2(direction.y, direction.x);
-
-      return { cx, cy, width, height, angle };
-    }
-
-    function getDirectionVector(coords) {
-      if (coords.length < 2) {
-        return { x: 1, y: 0 };
+    function applyThermal(imgData) {
+      const d = imgData.data;
+      const len = d.length;
+      for (let i = 0; i < len; i += 4) {
+        const lum = (d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8;
+        const t = lum / 255;
+        const [r, g, b] = thermalLut(t);
+        d[i] = r;
+        d[i + 1] = g;
+        d[i + 2] = b;
       }
-      const wrist = coords[0];
-      const fingertip = coords[9] ?? coords[1];
-      return {
-        x: fingertip.x - wrist.x,
-        y: fingertip.y - wrist.y
-      };
     }
 
-    function scaleBoxToViewport(box, scaleX, scaleY) {
-      return {
-        cx: box.cx * scaleX,
-        cy: box.cy * scaleY,
-        width: box.width * scaleX,
-        height: box.height * scaleY,
-        angle: box.angle
-      };
-    }
-
-    function applyThermalColormap(imageData, shift, box, motion) {
-      const data = imageData.data;
-      const w = imageData.width;
-      const h = imageData.height;
-      const cxVid = box.cx;
-      const cyVid = box.cy;
-      const halfW = box.width / 2;
-      const halfH = box.height / 2;
-      const invMaxDist = 1 / Math.max(1, Math.sqrt(halfW * halfW + halfH * halfH));
-      const hotBoost = 0.3 + motion * 0.5;
-      const edgeRadius = 0.15;
-      const edgeInv = 1 / edgeRadius;
-
-      for (let y = 0; y < h; y++) {
-        const dy = y - cyVid;
-        const dy2 = dy * dy;
-        for (let x = 0; x < w; x++) {
-          const i = (y * w + x) * 4;
-          const dx = x - cxVid;
-          const dist = Math.sqrt(dx * dx + dy2) * invMaxDist;
-          const radial = dist < 1 ? 1 - dist : 0;
-
-          if (radial < 0.01) {
-            data[i] = 0;
-            data[i + 1] = 0;
-            data[i + 2] = 0;
-            continue;
-          }
-
-          const lum = (data[i] * 77 + data[i + 1] * 150 + data[i + 2] * 29) >> 8;
-          const heat = radial * hotBoost + (lum / 255) * (1 - hotBoost);
-          const t = Math.min(1, Math.max(0, heat + shift));
-          const edgeFade = radial < edgeRadius ? radial * edgeInv : 1;
-          const [cr, cg, cb] = cyberpunkLut(t);
-          data[i] = (cr * edgeFade + 0.5) | 0;
-          data[i + 1] = (cg * edgeFade + 0.5) | 0;
-          data[i + 2] = (cb * edgeFade + 0.5) | 0;
-        }
+    function thermalLut(t) {
+      if (t < 0.15) {
+        const f = t / 0.15;
+        return [10 * f | 0, 10 + f * 40 | 0, 80 + f * 120 | 0];
       }
-      return imageData;
-    }
-
-    function cyberpunkLut(t) {
-      if (t < 0.12) {
-        return [18, 10, 60 + t * 800];
-      }
-      if (t < 0.25) {
-        const f = (t - 0.12) / 0.13;
-        return [30 + f * 40, 8 + f * 20, 160 + f * 95];
-      }
-      if (t < 0.4) {
-        const f = (t - 0.25) / 0.15;
-        return [70 + f * 80, 28 + f * 120, 255 - f * 100];
+      if (t < 0.35) {
+        const f = (t - 0.15) / 0.2;
+        return [10 + f * 20 | 0, 50 + f * 145 | 0, 200 + f * 55 | 0];
       }
       if (t < 0.55) {
-        const f = (t - 0.4) / 0.15;
-        return [150 + f * 105, 148 + f * 107, 155 - f * 130];
+        const f = (t - 0.35) / 0.2;
+        return [30 + f * 60 | 0, 195 + f * 60 | 0, 255 - f * 130 | 0];
       }
-      if (t < 0.7) {
-        const f = (t - 0.55) / 0.15;
-        return [255, 255 - f * 80, 25 + f * 10];
+      if (t < 0.75) {
+        const f = (t - 0.55) / 0.2;
+        return [90 + f * 120 | 0, 255 - f * 30 | 0, 125 - f * 100 | 0];
       }
-      if (t < 0.85) {
-        const f = (t - 0.7) / 0.15;
-        return [255, 175 - f * 100, 35 + f * 30];
-      }
-      const f = (t - 0.85) / 0.15;
-      return [255, 75 + f * 20, 65 + f * 40];
+      const f = (t - 0.75) / 0.25;
+      return [210 + f * 45 | 0, 225 - f * 120 | 0, 25 + f * 10 | 0];
     }
 
-    function drawScanFrame(box, handIndex) {
-      const color = HAND_COLORS[handIndex] ?? HAND_COLORS[0];
-      const border = 2;
-      ctx.save();
-      ctx.strokeStyle = color.accent;
-      ctx.lineWidth = border;
-      ctx.shadowColor = color.accent;
-      ctx.shadowBlur = 12;
-      ctx.translate(box.cx, box.cy);
-      ctx.rotate(box.angle);
-      ctx.strokeRect(-box.width / 2, -box.height / 2, box.width, box.height);
-      ctx.shadowBlur = 0;
-      drawCornerBracket(-box.width / 2, -box.height / 2, 22, 18, color.accent);
-      drawCornerBracket(box.width / 2, -box.height / 2, -22, 18, color.accent);
-      drawCornerBracket(-box.width / 2, box.height / 2, 22, -18, color.accent);
-      drawCornerBracket(box.width / 2, box.height / 2, -22, -18, color.accent);
-
-      ctx.fillStyle = color.accent;
-      ctx.font = 'bold 13px "Source Code Pro", monospace';
-      ctx.textAlign = 'left';
-      ctx.fillText(color.label, -box.width / 2, -box.height / 2 - 8);
-      ctx.restore();
+    if (!('mediaDevices' in navigator && 'getUserMedia' in navigator.mediaDevices)) {
+      enterBtn.disabled = true;
+      boot.querySelector('p').textContent = 'Camera access required. Use a modern browser.';
     }
-
-    function drawCornerBracket(x, y, offsetX, offsetY, color) {
-      ctx.strokeStyle = color;
-      ctx.beginPath();
-      ctx.moveTo(x + Math.sign(offsetX) * 4, y);
-      ctx.lineTo(x + offsetX, y);
-      ctx.lineTo(x + offsetX, y + offsetY);
-      ctx.stroke();
-    }
-
-    function updateHudData(handResults) {
-      const handCount = handResults.length;
-      const areas = [];
-      const temps = [];
-
-      for (let i = 0; i < handResults.length; i++) {
-        const box = handResults[i];
-        const areaPct = Math.round((box.width * box.height) / (VIDEO_WIDTH * VIDEO_HEIGHT) * 100);
-        const temp = 32 + Math.round(Math.min(28, areaPct * 0.45 + motionScalars[i] * 30));
-        areas.push(`${String(areaPct).padStart(2, '0')}%`);
-        temps.push(`${temp}°C`);
-      }
-
-      while (areas.length < 2) areas.push('00%');
-      while (temps.length < 2) temps.push('--°C');
-
-      hudJson = {
-        seed: seedHex,
-        h1Area: areas[0], h2Area: areas[1],
-        h1Temp: temps[0], h2Temp: temps[1],
-        state: handCount > 0 ? 'ACTIVE' : 'IDLE',
-        view: handCount === 2 ? 'DUAL' : handCount === 1 ? 'HAND' : 'WAIT',
-        dot: handCount > 0 ? '#4cff96' : '#7f8fa4',
-        handCount
-      };
-    }
-
-    function drawHudOverlay() {
-      hudLeft.textContent = `HAND.SYS_08 - CALOR\nSEED: ${hudJson.seed}`;
-      hudRight.textContent = `H1: ${hudJson.h1Area} ${hudJson.h1Temp}\nH2: ${hudJson.h2Area} ${hudJson.h2Temp}`;
-      hudState.innerHTML = `<span class="status-dot" style="background:${hudJson.dot};"></span>STATE: ${hudJson.state} [${hudJson.handCount ?? 0}]`;
-      hudView.textContent = `VIEW: ${hudJson.view}`;
-      updateDebug();
-    }
-
-    function updateHudOverlay() {
-      drawHudOverlay();
-    }
-
-    function updateDebug() {
-      debugPanel.textContent = `STATUS: ${debugText}`;
-    }
-
-    function generateSeed() {
-      return Math.floor(Math.random() * 0xffffff).toString(16).toUpperCase().padStart(6, '0');
-    }
-
-    if ('mediaDevices' in navigator && 'getUserMedia' in navigator.mediaDevices) {
-      toggleBtn.disabled = false;
-    } else {
-      toggleBtn.disabled = true;
-      boot.querySelector('p').textContent = 'Webcam access is required. Please open this page in a secure browser that supports getUserMedia().';
-    }
-
-    updateHudOverlay();
   </script>
 </body>
 </html>
