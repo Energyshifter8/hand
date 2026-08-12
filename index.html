@@ -231,7 +231,11 @@
     const hiddenCtx = hiddenCanvas.getContext('2d');
 
     const handThermalCanvases = [document.createElement('canvas'), document.createElement('canvas')];
-    handThermalCanvases.forEach(c => { c.width = VIDEO_WIDTH; c.height = VIDEO_HEIGHT; });
+    const THERMAL_SCALE = 0.25;
+    const THERMAL_W = Math.round(VIDEO_WIDTH * THERMAL_SCALE);
+    const THERMAL_H = Math.round(VIDEO_HEIGHT * THERMAL_SCALE);
+    handThermalCanvases.forEach(c => { c.width = THERMAL_W; c.height = THERMAL_H; });
+    const thermalCache = [{ cx: -1, cy: -1, motion: -1, data: null }, { cx: -1, cy: -1, motion: -1, data: null }];
 
     const hudLeft = document.getElementById('hud-left');
     const hudRight = document.getElementById('hud-right');
@@ -453,11 +457,22 @@
         const thermalShift = HAND_COLORS[i]?.thermalShift ?? 0;
         const handCanvas = handThermalCanvases[i];
         const motion = motionScalars[i];
+        const cache = thermalCache[i];
 
-        hiddenCtx.drawImage(video, 0, 0, VIDEO_WIDTH, VIDEO_HEIGHT);
-        const imageData = hiddenCtx.getImageData(0, 0, VIDEO_WIDTH, VIDEO_HEIGHT);
-        applyThermalColormap(imageData, thermalShift, box, motion);
-        handCanvas.getContext('2d').putImageData(imageData, 0, 0);
+        const posChanged = Math.abs(box.cx - cache.cx) > 8 || Math.abs(box.cy - cache.cy) > 8;
+        const motionChanged = Math.abs(motion - cache.motion) > 0.1;
+
+        if (posChanged || motionChanged || !cache.data) {
+          hiddenCtx.drawImage(video, 0, 0, THERMAL_W, THERMAL_H);
+          const imageData = hiddenCtx.getImageData(0, 0, THERMAL_W, THERMAL_H);
+          const scaledBox = { cx: box.cx * THERMAL_SCALE, cy: box.cy * THERMAL_SCALE, width: box.width * THERMAL_SCALE, height: box.height * THERMAL_SCALE };
+          applyThermalColormap(imageData, thermalShift, scaledBox, motion);
+          handCanvas.getContext('2d').putImageData(imageData, 0, 0);
+          cache.cx = box.cx;
+          cache.cy = box.cy;
+          cache.motion = motion;
+          cache.data = true;
+        }
 
         ctx.save();
         ctx.translate(scaled.cx, scaled.cy);
@@ -466,6 +481,8 @@
         ctx.rect(-scaled.width / 2, -scaled.height / 2, scaled.width, scaled.height);
         ctx.clip();
         ctx.globalAlpha = 0.92;
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'medium';
         ctx.drawImage(handCanvas, 0, 0, viewport.width, viewport.height);
         ctx.globalAlpha = 1;
         ctx.restore();
@@ -521,39 +538,39 @@
       const data = imageData.data;
       const w = imageData.width;
       const h = imageData.height;
-
       const cxVid = box.cx;
       const cyVid = box.cy;
       const halfW = box.width / 2;
       const halfH = box.height / 2;
-      const maxDist = Math.sqrt(halfW * halfW + halfH * halfH);
-
+      const invMaxDist = 1 / Math.max(1, Math.sqrt(halfW * halfW + halfH * halfH));
       const hotBoost = 0.3 + motion * 0.5;
+      const edgeRadius = 0.15;
+      const edgeInv = 1 / edgeRadius;
 
       for (let y = 0; y < h; y++) {
+        const dy = y - cyVid;
+        const dy2 = dy * dy;
         for (let x = 0; x < w; x++) {
           const i = (y * w + x) * 4;
-          const r = data[i];
-          const g = data[i + 1];
-          const b = data[i + 2];
-
-          const luminance = 0.2989 * r + 0.587 * g + 0.114 * b;
-          const normalized = luminance / 255;
-
           const dx = x - cxVid;
-          const dy = y - cyVid;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          const radial = 1 - Math.min(1, dist / maxDist);
+          const dist = Math.sqrt(dx * dx + dy2) * invMaxDist;
+          const radial = dist < 1 ? 1 - dist : 0;
 
-          const heat = radial * hotBoost + normalized * (1 - hotBoost);
-          const adjusted = Math.min(1, Math.max(0, heat + shift));
-          const [cr, cg, cb] = cyberpunkLut(adjusted);
+          if (radial < 0.01) {
+            data[i] = 0;
+            data[i + 1] = 0;
+            data[i + 2] = 0;
+            continue;
+          }
 
-          const edgeFade = radial < 0.15 ? radial / 0.15 : 1;
-
-          data[i] = Math.round(cr * edgeFade);
-          data[i + 1] = Math.round(cg * edgeFade);
-          data[i + 2] = Math.round(cb * edgeFade);
+          const lum = (data[i] * 77 + data[i + 1] * 150 + data[i + 2] * 29) >> 8;
+          const heat = radial * hotBoost + (lum / 255) * (1 - hotBoost);
+          const t = Math.min(1, Math.max(0, heat + shift));
+          const edgeFade = radial < edgeRadius ? radial * edgeInv : 1;
+          const [cr, cg, cb] = cyberpunkLut(t);
+          data[i] = (cr * edgeFade + 0.5) | 0;
+          data[i + 1] = (cg * edgeFade + 0.5) | 0;
+          data[i + 2] = (cb * edgeFade + 0.5) | 0;
         }
       }
       return imageData;
