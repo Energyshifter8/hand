@@ -173,6 +173,17 @@
       margin-right: 8px;
       box-shadow: 0 0 12px rgba(0,0,0,0.18);
     }
+
+    #debug {
+      position: absolute;
+      left: 18px;
+      top: 110px;
+      z-index: 12;
+      pointer-events: none;
+      width: auto;
+      max-width: calc(100% - 60px);
+      opacity: 0.95;
+    }
   </style>
 </head>
 <body>
@@ -189,6 +200,7 @@
     <div id="controls">
       <button id="toggleBtn">Start Camera</button>
     </div>
+    <div id="debug" class="hud-block hud-text">STATUS: waiting</div>
     <div id="boot">
       <h1>THERMAL HAND SCAN</h1>
       <p>Retro terminal thermal effect with live MediaPipe hand landmark tracking, scanned region, and HUD overlay. Click ENTRAR to initialize the camera.</p>
@@ -220,6 +232,7 @@
     const hudRight = document.getElementById('hud-right');
     const hudState = document.getElementById('hud-state');
     const hudView = document.getElementById('hud-view');
+    const debugPanel = document.getElementById('debug');
     const toggleBtn = document.getElementById('toggleBtn');
     const boot = document.getElementById('boot');
     const enterBtn = document.getElementById('enterBtn');
@@ -239,6 +252,8 @@
     };
     let lastBox = null;
     let motionScalar = 0;
+    let cameraReady = false;
+    let debugText = 'idle';
 
     const shapeState = {
       center: { x: VIDEO_WIDTH / 2, y: VIDEO_HEIGHT / 2 },
@@ -281,8 +296,47 @@
     async function openCamera() {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { width: VIDEO_WIDTH, height: VIDEO_HEIGHT }, audio: false });
       video.srcObject = stream;
+      video.muted = true;
+      video.autoplay = true;
+      video.playsInline = true;
+      debugText = 'camera granted';
+      updateDebug();
       await video.play();
+      await waitForVideoReady();
+      cameraReady = !!(video.videoWidth && video.videoHeight);
+      debugText = cameraReady ? 'camera ready' : 'camera no frame';
+      updateDebug();
       return stream;
+    }
+
+    function waitForVideoReady() {
+      return new Promise((resolve, reject) => {
+        if (video.readyState >= 3 && video.videoWidth && video.videoHeight) {
+          resolve();
+          return;
+        }
+
+        const timeout = setTimeout(() => {
+          video.removeEventListener('loadedmetadata', onReady);
+          video.removeEventListener('canplay', onReady);
+          video.removeEventListener('canplaythrough', onReady);
+          reject(new Error('Video did not become ready in time'));
+        }, 8000);
+
+        const onReady = () => {
+          if (video.videoWidth && video.videoHeight) {
+            clearTimeout(timeout);
+            video.removeEventListener('loadedmetadata', onReady);
+            video.removeEventListener('canplay', onReady);
+            video.removeEventListener('canplaythrough', onReady);
+            resolve();
+          }
+        };
+
+        video.addEventListener('loadedmetadata', onReady, { once: true });
+        video.addEventListener('canplay', onReady, { once: true });
+        video.addEventListener('canplaythrough', onReady, { once: true });
+      });
     }
 
     function stopCamera() {
@@ -305,15 +359,26 @@
     }
 
     async function loadMediaPipe() {
-      const vision = await FilesetResolver.forVisionTasks(assetsPath);
-      handLandmarker = await HandLandmarker.createFromOptions(vision, {
-        baseOptions: { modelAssetPath },
-        runningMode: 'VIDEO',
-        numHands: 1,
-        minHandDetectionConfidence: 0.55,
-        minTrackingConfidence: 0.55,
-        minHandPresenceConfidence: 0.5
-      });
+      try {
+        debugText = 'loading model';
+        updateDebug();
+        const vision = await FilesetResolver.forVisionTasks(assetsPath);
+        handLandmarker = await HandLandmarker.createFromOptions(vision, {
+          baseOptions: { modelAssetPath },
+          runningMode: 'VIDEO',
+          numHands: 1,
+          minHandDetectionConfidence: 0.55,
+          minTrackingConfidence: 0.55,
+          minHandPresenceConfidence: 0.5
+        });
+        debugText = 'model loaded';
+        updateDebug();
+      } catch (error) {
+        console.error('MediaPipe load failed:', error);
+        debugText = 'model load failed';
+        updateDebug();
+        throw error;
+      }
     }
 
     function animateFrame() {
@@ -324,6 +389,8 @@
       drawFrame()
         .catch((error) => {
           console.warn('Frame processing error:', error);
+          debugText = 'frame error';
+          updateDebug();
         })
         .finally(() => {
           animationHandle = requestAnimationFrame(animateFrame);
@@ -336,16 +403,31 @@
       thermalCanvas.width = VIDEO_WIDTH;
       thermalCanvas.height = VIDEO_HEIGHT;
 
+      ctx.clearRect(0, 0, viewport.width, viewport.height);
+      ctx.fillStyle = '#040c18';
+      ctx.fillRect(0, 0, viewport.width, viewport.height);
+
+      if (!cameraReady || video.readyState < 2 || !video.videoWidth || !video.videoHeight) {
+        debugText = `waiting for video (${video.readyState}/${video.videoWidth}x${video.videoHeight})`;
+        updateDebug();
+        return;
+      }
+
       hiddenCtx.drawImage(video, 0, 0, VIDEO_WIDTH, VIDEO_HEIGHT);
       const imageData = hiddenCtx.getImageData(0, 0, VIDEO_WIDTH, VIDEO_HEIGHT);
       thermalCtx.putImageData(applyThermalColormap(imageData), 0, 0);
-
-      ctx.clearRect(0, 0, viewport.width, viewport.height);
       ctx.drawImage(video, 0, 0, viewport.width, viewport.height);
 
-      const result = await handLandmarker.detectForVideo(video, performance.now());
-      const landmarks = result?.landmarks?.[0] ?? [];
-      const boxInfo = landmarks.length ? computeRotatedBoundingBox(landmarks) : null;
+      let boxInfo = null;
+      try {
+        const result = await handLandmarker.detectForVideo(video, performance.now());
+        const landmarks = result?.landmarks?.[0] ?? [];
+        boxInfo = landmarks.length ? computeRotatedBoundingBox(landmarks) : null;
+      } catch (error) {
+        console.warn('HandLandmarker detect error:', error);
+        debugText = 'detection error';
+        updateDebug();
+      }
 
       if (boxInfo) {
         lastBox = boxInfo;
@@ -356,7 +438,7 @@
       }
 
       updateHudData(boxInfo);
-      drawHudOverlay(boxInfo);
+      drawHudOverlay();
     }
 
     function computeRotatedBoundingBox(landmarks) {
@@ -503,10 +585,15 @@
       hudRight.textContent = `AREA: ${hudJson.area}\nTMAX: ${hudJson.tmax}`;
       hudState.innerHTML = `<span class="status-dot" style="background:${hudJson.dot};"></span>STATE: ${hudJson.state}`;
       hudView.textContent = `VIEW: ${hudJson.view}`;
+      updateDebug();
     }
 
     function updateHudOverlay() {
       drawHudOverlay();
+    }
+
+    function updateDebug() {
+      debugPanel.textContent = `STATUS: ${debugText}`;
     }
 
     function generateSeed() {
