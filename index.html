@@ -97,11 +97,13 @@
 
     const KAMUI_ARM_COLOR = '#e8580c';
     const KAMUI_ARM_ALT = '#ff6a00';
-    const KAMUI_SPEED = 0.8;
-    const KAMUI_ARMS = 3;
-    const KAMUI_TWIST = 5;
-    const KAMUI_SPIRAL_STEP = 0.015;
     const KAMUI_FADE_SPEED = 4.0;
+    const KAMUI_ARMS = 4;
+    const KAMUI_TWIST = 7;
+    const KAMUI_SPIRAL_STEP = 0.012;
+    const KAMUI_IDLE_ROT_SPEED = 0.05;
+    const KAMUI_MAX_ROT_SPEED = 2.5;
+    const MAX_PARTICLES = 40;
 
     const video = document.getElementById('video');
     const viewport = document.getElementById('viewport');
@@ -116,6 +118,10 @@
     const thermalCtx = thermalBuf.getContext('2d');
     const spiralBuf = document.createElement('canvas');
     const spiralCtx = spiralBuf.getContext('2d');
+    const frameBuf = document.createElement('canvas');
+    const frameCtx = frameBuf.getContext('2d');
+    const maskBuf = document.createElement('canvas');
+    const maskCtx = maskBuf.getContext('2d');
 
     let landmarker = null;
     let faceLandmarker = null;
@@ -130,6 +136,8 @@
     let rotationOffset = 0;
     let faceSkipCounter = 0;
     let lastFrameTime = 0;
+    let particles = [];
+    let perfWarned = false;
 
     enterBtn.addEventListener('click', async () => {
       boot.style.display = 'none';
@@ -240,9 +248,13 @@
       } else {
         kamuiIntensity = Math.max(0, kamuiIntensity - KAMUI_FADE_SPEED * dt);
       }
+
       if (kamuiIntensity > 0.001 && faceLandmarks) {
-        drawKamuiColorGrade(vw, vh, kamuiIntensity);
-        drawKamuiSpiral(vw, vh, kamuiIntensity);
+        drawKamuiSpiral(vw, vh, kamuiIntensity, dt);
+        drawKamuiGrade(vw, vh, kamuiIntensity);
+        drawKamuiParticles(vw, vh, kamuiIntensity, dt);
+        applyKamuiAberration(vw, vh, kamuiIntensity);
+        applyKamuiDesaturate(vw, vh, kamuiIntensity);
       }
 
       if (!landmarks) {
@@ -356,39 +368,47 @@
       return text;
     }
 
-    function drawKamuiColorGrade(vw, vh, intensity) {
-      ctx.save();
-      ctx.globalAlpha = intensity * 0.45;
-      ctx.globalCompositeOperation = 'overlay';
-      const grad = ctx.createRadialGradient(vw / 2, vh / 2, 0, vw / 2, vh / 2, Math.max(vw, vh) * 0.7);
-      grad.addColorStop(0, '#ff6a00');
-      grad.addColorStop(0.4, '#e8580c');
-      grad.addColorStop(0.75, '#1a0a00');
-      grad.addColorStop(1, '#000000');
-      ctx.fillStyle = grad;
-      ctx.fillRect(0, 0, vw, vh);
-      ctx.globalCompositeOperation = 'source-over';
-      ctx.globalAlpha = 1;
-      ctx.restore();
+    /* ─── Face oval helpers ─────────────────────────────────── */
+
+    function getFaceOvalPoints(vw, vh) {
+      return FACE_OVAL.map(idx => ({
+        x: faceLandmarks[idx].x * vw,
+        y: faceLandmarks[idx].y * vh
+      }));
     }
 
-    function drawKamuiSpiral(vw, vh, intensity) {
-      const pts = [];
-      for (const idx of FACE_OVAL) {
-        pts.push({ x: faceLandmarks[idx].x * vw, y: faceLandmarks[idx].y * vh });
-      }
-
+    function getFaceCenter(pts) {
       let cx = 0, cy = 0;
       for (const p of pts) { cx += p.x; cy += p.y; }
-      cx /= pts.length;
-      cy /= pts.length;
+      return { x: cx / pts.length, y: cy / pts.length };
+    }
 
-      let radius = 0;
-      for (const p of pts) {
-        radius += Math.hypot(p.x - cx, p.y - cy);
+    function getFaceRadius(pts, center) {
+      let r = 0;
+      for (const p of pts) r += Math.hypot(p.x - center.x, p.y - center.y);
+      return (r / pts.length) * 1.15;
+    }
+
+    function traceFaceOval(ctx, pts) {
+      if (pts.length < 3) return;
+      ctx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < pts.length - 1; i++) {
+        const mx = (pts[i].x + pts[i + 1].x) / 2;
+        const my = (pts[i].y + pts[i + 1].y) / 2;
+        ctx.quadraticCurveTo(pts[i].x, pts[i].y, mx, my);
       }
-      radius /= pts.length;
-      radius *= 1.15;
+      const last = pts[pts.length - 1];
+      const first = pts[0];
+      ctx.quadraticCurveTo(last.x, last.y, first.x, first.y);
+      ctx.closePath();
+    }
+
+    /* ─── Spiral ────────────────────────────────────────────── */
+
+    function drawKamuiSpiral(vw, vh, intensity, dt) {
+      const pts = getFaceOvalPoints(vw, vh);
+      const center = getFaceCenter(pts);
+      const radius = getFaceRadius(pts, center);
 
       const renderSize = Math.ceil(radius * 2.4);
       const bufSize = renderSize * 2;
@@ -404,6 +424,7 @@
       const maxTheta = KAMUI_TWIST * Math.PI * 2;
       const steps = Math.ceil(maxTheta / KAMUI_SPIRAL_STEP);
 
+      /* --- glow pass (underneath, broad bloom) --- */
       for (let arm = 0; arm < KAMUI_ARMS; arm++) {
         const phase = (arm / KAMUI_ARMS) * Math.PI * 2;
         spiralCtx.beginPath();
@@ -418,34 +439,127 @@
           if (first) { spiralCtx.moveTo(x, y); first = false; }
           else spiralCtx.lineTo(x, y);
         }
-        spiralCtx.strokeStyle = arm % 2 === 0 ? KAMUI_ARM_COLOR : KAMUI_ARM_ALT;
-        spiralCtx.lineWidth = 6;
+        const widthAtEdge = 8;
+        const widthAtCenter = 1.5;
+        const taperWidth = widthAtEdge - (widthAtEdge - widthAtCenter) * 0.5;
+        spiralCtx.strokeStyle = '#ff6a00';
+        spiralCtx.lineWidth = taperWidth;
         spiralCtx.lineCap = 'round';
         spiralCtx.lineJoin = 'round';
-        spiralCtx.globalAlpha = intensity;
-        spiralCtx.shadowColor = 'rgba(232,88,12,0.5)';
-        spiralCtx.shadowBlur = 8;
+        spiralCtx.globalAlpha = intensity * 0.5;
+        spiralCtx.shadowColor = '#ff6a00';
+        spiralCtx.shadowBlur = 25;
         spiralCtx.stroke();
+      }
+
+      /* --- crisp tapered pass (on top, chunked for perf) --- */
+      spiralCtx.shadowBlur = 0;
+      const CHUNK = 18;
+      for (let arm = 0; arm < KAMUI_ARMS; arm++) {
+        const phase = (arm / KAMUI_ARMS) * Math.PI * 2;
+        const color = arm % 2 === 0 ? KAMUI_ARM_COLOR : KAMUI_ARM_ALT;
+        for (let start = 0; start <= steps; start += CHUNK) {
+          const end = Math.min(start + CHUNK, steps);
+          const midT = ((start + end) / 2) / steps;
+          const w = 8 * (1 - midT) + 1;
+          spiralCtx.beginPath();
+          for (let i = start; i <= end; i++) {
+            const theta = i * KAMUI_SPIRAL_STEP;
+            const t = theta / maxTheta;
+            const r = t * radius;
+            const angle = theta + phase + rotationOffset;
+            const x = spiralCx + r * Math.cos(angle);
+            const y = spiralCy + r * Math.sin(angle);
+            if (i === start) spiralCtx.moveTo(x, y);
+            else spiralCtx.lineTo(x, y);
+          }
+          spiralCtx.strokeStyle = color;
+          spiralCtx.lineWidth = w;
+          spiralCtx.lineCap = 'round';
+          spiralCtx.globalAlpha = intensity * (0.85 + 0.15 * (1 - midT));
+          spiralCtx.stroke();
+        }
+      }
+
+      /* --- radial crack lines at peak intensity --- */
+      if (intensity > 0.7) {
+        const crackAlpha = (intensity - 0.7) / 0.3;
+        spiralCtx.globalAlpha = crackAlpha * 0.7;
+        spiralCtx.strokeStyle = '#ff8c00';
+        spiralCtx.lineWidth = 1.2;
+        spiralCtx.lineCap = 'round';
+        const rng = mulberry32(42);
+        const crackCount = 8;
+        for (let c = 0; c < crackCount; c++) {
+          const spawnT = rng();
+          const spawnTheta = spawnT * maxTheta;
+          const spawnR = spawnT * radius;
+          const baseAngle = spawnTheta + (rng() * 0.4 - 0.2) + rotationOffset;
+          const cx = spiralCx + spawnR * Math.cos(baseAngle);
+          const cy = spiralCy + spawnR * Math.sin(baseAngle);
+          const segCount = 3 + (rng() * 3 | 0);
+          spiralCtx.beginPath();
+          spiralCtx.moveTo(cx, cy);
+          let px = cx, py = cy;
+          for (let s = 0; s < segCount; s++) {
+            const len = 4 + rng() * 10;
+            const dir = baseAngle + (rng() - 0.5) * 1.8;
+            const nx = px + len * Math.cos(dir);
+            const ny = py + len * Math.sin(dir);
+            spiralCtx.lineTo(nx, ny);
+            px = nx;
+            py = ny;
+          }
+          spiralCtx.stroke();
+        }
       }
 
       spiralCtx.globalAlpha = 1;
       spiralCtx.shadowBlur = 0;
 
-      ctx.save();
-      ctx.beginPath();
-      ctx.moveTo(pts[0].x, pts[0].y);
-      for (let i = 1; i < pts.length; i++) {
-        ctx.lineTo(pts[i].x, pts[i].y);
+      /* --- composite spiral through face oval with feathered edge --- */
+      if (maskBuf.width !== bufSize || maskBuf.height !== bufSize) {
+        maskBuf.width = bufSize;
+        maskBuf.height = bufSize;
       }
-      ctx.closePath();
-      ctx.clip();
+      maskCtx.clearRect(0, 0, bufSize, bufSize);
+
+      const ptsLocal = pts.map(p => ({
+        x: p.x - (center.x - renderSize / 2),
+        y: p.y - (center.y - renderSize / 2)
+      }));
+      maskCtx.beginPath();
+      traceFaceOval(maskCtx, ptsLocal);
+      maskCtx.closePath();
+      maskCtx.fillStyle = '#fff';
+      maskCtx.fill();
+
+      maskCtx.globalCompositeOperation = 'destination-in';
+      const featherPx = 6 * devicePixelRatio;
+      const grad = maskCtx.createRadialGradient(
+        spiralCx, spiralCy, Math.max(0, radius - featherPx),
+        spiralCx, spiralCy, radius + featherPx * 0.5
+      );
+      grad.addColorStop(0, 'rgba(255,255,255,1)');
+      grad.addColorStop(0.7, 'rgba(255,255,255,0.9)');
+      grad.addColorStop(1, 'rgba(255,255,255,0)');
+      maskCtx.fillStyle = grad;
+      maskCtx.fillRect(0, 0, bufSize, bufSize);
+
+      spiralCtx.globalCompositeOperation = 'destination-in';
+      spiralCtx.drawImage(maskBuf, 0, 0);
+      spiralCtx.globalCompositeOperation = 'source-over';
+
+      ctx.save();
+      ctx.globalAlpha = intensity;
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = 'high';
-      ctx.globalAlpha = intensity;
-      ctx.drawImage(spiralBuf, 0, 0, bufSize, bufSize, cx - renderSize / 2, cy - renderSize / 2, renderSize, renderSize);
+      ctx.drawImage(spiralBuf, 0, 0, bufSize, bufSize,
+        center.x - renderSize / 2, center.y - renderSize / 2, renderSize, renderSize);
       ctx.globalAlpha = 1;
       ctx.restore();
 
+      /* --- face oval stroke (glowing outline) --- */
       ctx.save();
       ctx.globalAlpha = intensity;
       ctx.strokeStyle = KAMUI_ARM_COLOR;
@@ -453,18 +567,146 @@
       ctx.shadowColor = 'rgba(255,106,0,0.5)';
       ctx.shadowBlur = 10;
       ctx.beginPath();
-      ctx.moveTo(pts[0].x, pts[0].y);
-      for (let i = 1; i < pts.length; i++) {
-        ctx.lineTo(pts[i].x, pts[i].y);
-      }
-      ctx.closePath();
+      traceFaceOval(ctx, pts);
       ctx.stroke();
       ctx.globalAlpha = 1;
       ctx.shadowBlur = 0;
       ctx.restore();
 
-      rotationOffset += KAMUI_SPEED * (1 / 60);
+      /* --- rotation: idle drift + acceleration toward 1 --- */
+      const rotSpeed = KAMUI_IDLE_ROT_SPEED + (KAMUI_MAX_ROT_SPEED - KAMUI_IDLE_ROT_SPEED) * intensity;
+      rotationOffset += rotSpeed * dt;
     }
+
+    /* ─── Full-frame color grade + vignette ─────────────────── */
+
+    function drawKamuiGrade(vw, vh, intensity) {
+      ctx.save();
+
+      /* desaturation underlay: low-alpha gray so orange pops more */
+      ctx.globalAlpha = intensity * 0.08;
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.fillStyle = '#808080';
+      ctx.fillRect(0, 0, vw, vh);
+
+      /* warm radial grade */
+      ctx.globalAlpha = intensity * 0.5;
+      ctx.globalCompositeOperation = 'overlay';
+      const grad = ctx.createRadialGradient(vw / 2, vh / 2, 0, vw / 2, vh / 2, Math.max(vw, vh) * 0.7);
+      grad.addColorStop(0, '#ff6a00');
+      grad.addColorStop(0.35, '#e8580c');
+      grad.addColorStop(0.7, '#1a0a00');
+      grad.addColorStop(1, '#000000');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, vw, vh);
+      ctx.globalCompositeOperation = 'source-over';
+
+      /* deep vignette: edges go near-black */
+      ctx.globalAlpha = intensity * 0.9;
+      const vig = ctx.createRadialGradient(vw / 2, vh / 2, vw * 0.18, vw / 2, vh / 2, Math.max(vw, vh) * 0.72);
+      vig.addColorStop(0, 'rgba(0,0,0,0)');
+      vig.addColorStop(0.45, 'rgba(0,0,0,0.15)');
+      vig.addColorStop(0.7, 'rgba(0,0,0,0.5)');
+      vig.addColorStop(1, 'rgba(0,0,0,0.88)');
+      ctx.fillStyle = vig;
+      ctx.fillRect(0, 0, vw, vh);
+
+      ctx.globalAlpha = 1;
+      ctx.restore();
+    }
+
+    /* ─── Embers / particles ────────────────────────────────── */
+
+    function drawKamuiParticles(vw, vh, intensity, dt) {
+      if (intensity > 0.5) {
+        const spawnRate = 6 + intensity * 18;
+        const toSpawn = Math.min(MAX_PARTICLES - particles.length,
+          Math.ceil(spawnRate * dt));
+        for (let i = 0; i < toSpawn; i++) {
+          particles.push(createEmber(vw, vh, intensity));
+        }
+      }
+
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.life -= dt;
+        p.flickerPhase += p.flickerSpeed * dt;
+        if (p.life <= 0 || p.y < -10) {
+          particles.splice(i, 1);
+          continue;
+        }
+        const lifeFade = Math.min(1, p.life / 0.4);
+        const flicker = 0.6 + 0.4 * Math.sin(p.flickerPhase);
+        const a = p.alpha * lifeFade * flicker;
+        ctx.save();
+        ctx.globalAlpha = a;
+        ctx.globalCompositeOperation = 'screen';
+        ctx.shadowColor = p.color;
+        ctx.shadowBlur = 8;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        ctx.fillStyle = p.color;
+        ctx.fill();
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.globalAlpha = 1;
+        ctx.shadowBlur = 0;
+        ctx.restore();
+      }
+    }
+
+    function createEmber(vw, vh, intensity) {
+      const colors = ['#ff6a00', '#ff8c00', '#e8580c', '#ffaa33'];
+      const hue = Math.random();
+      return {
+        x: Math.random() * vw,
+        y: vh * (0.6 + Math.random() * 0.4),
+        vx: (Math.random() - 0.5) * 18,
+        vy: -(20 + Math.random() * 50 + intensity * 30),
+        size: 0.8 + Math.random() * 2,
+        alpha: 0.25 + Math.random() * 0.55,
+        life: 0.6 + Math.random() * 1.2,
+        color: colors[Math.random() * colors.length | 0],
+        flickerPhase: Math.random() * Math.PI * 2,
+        flickerSpeed: 4 + Math.random() * 8
+      };
+    }
+
+    /* ─── Chromatic aberration at high intensity ────────────── */
+
+    function applyKamuiAberration(vw, vh, intensity) {
+      if (intensity < 0.85) return;
+      const abStr = (intensity - 0.85) / 0.15;
+      const offset = Math.round(2 + abStr);
+      if (frameBuf.width !== vw || frameBuf.height !== vh) {
+        frameBuf.width = vw;
+        frameBuf.height = vh;
+      }
+      frameCtx.drawImage(viewport, 0, 0);
+      ctx.save();
+      ctx.globalCompositeOperation = 'screen';
+      ctx.globalAlpha = abStr * 0.18;
+      ctx.drawImage(frameBuf, offset, 0);
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha = 1;
+      ctx.restore();
+    }
+
+    /* ─── Desaturation outside warm area ────────────────────── */
+
+    function applyKamuiDesaturate(vw, vh, intensity) {
+      if (intensity < 0.15) return;
+      ctx.save();
+      ctx.globalAlpha = intensity * 0.06;
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.fillStyle = '#555';
+      ctx.fillRect(0, 0, vw, vh);
+      ctx.globalAlpha = 1;
+      ctx.restore();
+    }
+
+    /* ─── Thermal LUT (unchanged) ──────────────────────────── */
 
     function applyThermal(imgData) {
       const d = imgData.data;
@@ -504,6 +746,18 @@
         b = 20 + f * 107 | 0;
       }
       return [r, g, b];
+    }
+
+    /* ─── Seeded PRNG for deterministic crack positions ─────── */
+
+    function mulberry32(seed) {
+      let s = seed;
+      return () => {
+        s |= 0; s = s + 0x6D2B79F5 | 0;
+        let t = Math.imul(s ^ s >>> 15, 1 | s);
+        t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+        return ((t ^ t >>> 14) >>> 0) / 4294967296;
+      };
     }
 
     if (!('mediaDevices' in navigator && 'getUserMedia' in navigator.mediaDevices)) {
