@@ -76,7 +76,7 @@
     <div id="hud">aguardando duas maos...</div>
     <div id="boot">
       <h1>Fingertip Screen</h1>
-      <p>Use thumb + index finger on both hands to create a collaborative thermal viewport. Press K to toggle Kamui overlay.</p>
+      <p>Use thumb + index finger on both hands to create a collaborative thermal viewport. Hold K or click/tap canvas to activate Kamui overlay.</p>
       <button id="enterBtn">INICIAR</button>
     </div>
   </div>
@@ -95,11 +95,13 @@
 
     const FACE_OVAL = [10,338,297,332,284,251,389,356,454,323,361,288,397,365,379,378,400,377,152,148,176,149,150,136,172,58,132,93,234,127,162,21,54,103,67,109,10];
 
-    const KAMUI_ARM_COLOR = '#ff6a00';
-    const KAMUI_BG_COLOR = '#1a1a1a';
+    const KAMUI_ARM_COLOR = '#e8580c';
+    const KAMUI_ARM_ALT = '#ff6a00';
     const KAMUI_SPEED = 0.8;
     const KAMUI_ARMS = 3;
     const KAMUI_TWIST = 5;
+    const KAMUI_SPIRAL_STEP = 0.015;
+    const KAMUI_FADE_SPEED = 4.0;
 
     const video = document.getElementById('video');
     const viewport = document.getElementById('viewport');
@@ -123,9 +125,11 @@
     let cameraReady = false;
     let faceReady = false;
     let faceLandmarks = null;
-    let kamuiEnabled = true;
+    let kamuiTrigger = false;
+    let kamuiIntensity = 0;
     let rotationOffset = 0;
     let faceSkipCounter = 0;
+    let lastFrameTime = 0;
 
     enterBtn.addEventListener('click', async () => {
       boot.style.display = 'none';
@@ -133,10 +137,17 @@
     });
 
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'k' || e.key === 'K') {
-        kamuiEnabled = !kamuiEnabled;
-      }
+      if (e.key === 'k' || e.key === 'K') kamuiTrigger = true;
     });
+    document.addEventListener('keyup', (e) => {
+      if (e.key === 'k' || e.key === 'K') kamuiTrigger = false;
+    });
+    viewport.addEventListener('mousedown', () => { kamuiTrigger = true; });
+    viewport.addEventListener('mouseup', () => { kamuiTrigger = false; });
+    viewport.addEventListener('mouseleave', () => { kamuiTrigger = false; });
+    viewport.addEventListener('touchstart', (e) => { e.preventDefault(); kamuiTrigger = true; }, { passive: false });
+    viewport.addEventListener('touchend', () => { kamuiTrigger = false; });
+    viewport.addEventListener('touchcancel', () => { kamuiTrigger = false; });
 
     async function start() {
       if (!stream) {
@@ -193,6 +204,9 @@
     async function draw() {
       const vw = viewport.width = viewport.clientWidth * devicePixelRatio;
       const vh = viewport.height = viewport.clientHeight * devicePixelRatio;
+      const now = performance.now();
+      const dt = lastFrameTime ? Math.min((now - lastFrameTime) / 1000, 0.05) : 1 / 60;
+      lastFrameTime = now;
 
       if (!cameraReady || video.readyState < 2) {
         ctx.fillStyle = '#000';
@@ -221,8 +235,14 @@
 
       ctx.drawImage(video, 0, 0, vw, vh);
 
-      if (kamuiEnabled && faceLandmarks) {
-        drawKamuiOverlay(vw, vh);
+      if (kamuiTrigger && faceLandmarks) {
+        kamuiIntensity = Math.min(1, kamuiIntensity + KAMUI_FADE_SPEED * dt);
+      } else {
+        kamuiIntensity = Math.max(0, kamuiIntensity - KAMUI_FADE_SPEED * dt);
+      }
+      if (kamuiIntensity > 0.001 && faceLandmarks) {
+        drawKamuiColorGrade(vw, vh, kamuiIntensity);
+        drawKamuiSpiral(vw, vh, kamuiIntensity);
       }
 
       if (!landmarks) {
@@ -328,13 +348,31 @@
 
     function buildHudText(handsActive) {
       let text = handsActive ? 'JANELA ATIVA' : 'aguardando duas maos...';
-      if (kamuiEnabled) {
-        text += ' | ' + (faceLandmarks ? 'KAMUI ACTIVE' : 'KAMUI WAITING');
+      if (kamuiIntensity > 0.01 && faceLandmarks) {
+        text += ' | KAMUI ACTIVE';
+      } else if (faceLandmarks) {
+        text += ' | KAMUI READY';
       }
       return text;
     }
 
-    function drawKamuiOverlay(vw, vh) {
+    function drawKamuiColorGrade(vw, vh, intensity) {
+      ctx.save();
+      ctx.globalAlpha = intensity * 0.45;
+      ctx.globalCompositeOperation = 'overlay';
+      const grad = ctx.createRadialGradient(vw / 2, vh / 2, 0, vw / 2, vh / 2, Math.max(vw, vh) * 0.7);
+      grad.addColorStop(0, '#ff6a00');
+      grad.addColorStop(0.4, '#e8580c');
+      grad.addColorStop(0.75, '#1a0a00');
+      grad.addColorStop(1, '#000000');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, vw, vh);
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha = 1;
+      ctx.restore();
+    }
+
+    function drawKamuiSpiral(vw, vh, intensity) {
       const pts = [];
       for (const idx of FACE_OVAL) {
         pts.push({ x: faceLandmarks[idx].x * vw, y: faceLandmarks[idx].y * vh });
@@ -352,13 +390,46 @@
       radius /= pts.length;
       radius *= 1.15;
 
-      const sz = Math.ceil(radius * 2) + 2;
-      if (spiralBuf.width !== sz || spiralBuf.height !== sz) {
-        spiralBuf.width = sz;
-        spiralBuf.height = sz;
+      const renderSize = Math.ceil(radius * 2.4);
+      const bufSize = renderSize * 2;
+      if (spiralBuf.width !== bufSize || spiralBuf.height !== bufSize) {
+        spiralBuf.width = bufSize;
+        spiralBuf.height = bufSize;
       }
-      spiralCtx.clearRect(0, 0, sz, sz);
-      drawSpiral(spiralCtx, sz / 2, sz / 2, radius, rotationOffset);
+      spiralCtx.clearRect(0, 0, bufSize, bufSize);
+      spiralCtx.imageSmoothingEnabled = true;
+
+      const spiralCx = bufSize / 2;
+      const spiralCy = bufSize / 2;
+      const maxTheta = KAMUI_TWIST * Math.PI * 2;
+      const steps = Math.ceil(maxTheta / KAMUI_SPIRAL_STEP);
+
+      for (let arm = 0; arm < KAMUI_ARMS; arm++) {
+        const phase = (arm / KAMUI_ARMS) * Math.PI * 2;
+        spiralCtx.beginPath();
+        let first = true;
+        for (let i = 0; i <= steps; i++) {
+          const theta = i * KAMUI_SPIRAL_STEP;
+          const t = theta / maxTheta;
+          const r = t * radius;
+          const angle = theta + phase + rotationOffset;
+          const x = spiralCx + r * Math.cos(angle);
+          const y = spiralCy + r * Math.sin(angle);
+          if (first) { spiralCtx.moveTo(x, y); first = false; }
+          else spiralCtx.lineTo(x, y);
+        }
+        spiralCtx.strokeStyle = arm % 2 === 0 ? KAMUI_ARM_COLOR : KAMUI_ARM_ALT;
+        spiralCtx.lineWidth = 6;
+        spiralCtx.lineCap = 'round';
+        spiralCtx.lineJoin = 'round';
+        spiralCtx.globalAlpha = intensity;
+        spiralCtx.shadowColor = 'rgba(232,88,12,0.5)';
+        spiralCtx.shadowBlur = 8;
+        spiralCtx.stroke();
+      }
+
+      spiralCtx.globalAlpha = 1;
+      spiralCtx.shadowBlur = 0;
 
       ctx.save();
       ctx.beginPath();
@@ -368,10 +439,15 @@
       }
       ctx.closePath();
       ctx.clip();
-      ctx.drawImage(spiralBuf, cx - sz / 2, cy - sz / 2, sz, sz);
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.globalAlpha = intensity;
+      ctx.drawImage(spiralBuf, 0, 0, bufSize, bufSize, cx - renderSize / 2, cy - renderSize / 2, renderSize, renderSize);
+      ctx.globalAlpha = 1;
       ctx.restore();
 
       ctx.save();
+      ctx.globalAlpha = intensity;
       ctx.strokeStyle = KAMUI_ARM_COLOR;
       ctx.lineWidth = 1.5;
       ctx.shadowColor = 'rgba(255,106,0,0.5)';
@@ -383,31 +459,11 @@
       }
       ctx.closePath();
       ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.shadowBlur = 0;
       ctx.restore();
 
       rotationOffset += KAMUI_SPEED * (1 / 60);
-    }
-
-    function drawSpiral(c, cx, cy, radius, time) {
-      const rings = 30;
-      for (let ring = 0; ring < rings; ring++) {
-        const r1 = (ring / rings) * radius;
-        const r2 = ((ring + 1) / rings) * radius;
-        const slices = Math.max(6, ring * 2 + 4);
-        for (let s = 0; s < slices; s++) {
-          const a1 = (s / slices) * Math.PI * 2;
-          const a2 = ((s + 1) / slices) * Math.PI * 2;
-          const midA = (a1 + a2) / 2;
-          const spiralA = midA + (r1 / radius) * KAMUI_TWIST + time;
-          const arm = Math.floor((spiralA / (Math.PI * 2)) * KAMUI_ARMS);
-          c.beginPath();
-          c.arc(cx, cy, r2, a1, a2);
-          c.arc(cx, cy, r1, a2, a1, true);
-          c.closePath();
-          c.fillStyle = arm % 2 === 0 ? KAMUI_ARM_COLOR : KAMUI_BG_COLOR;
-          c.fill();
-        }
-      }
     }
 
     function applyThermal(imgData) {
